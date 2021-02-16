@@ -47,7 +47,10 @@ exports.decorateTerm = (Term, { React }) => {
       this.handleOnFocus = this.handleOnFocus.bind(this);
       this.handleOnKeyDown = this.handleOnKeyDown.bind(this);
       this.handleToggleCaseInsensitive = this.handleToggleCaseInsensitive.bind(this);
-      this.state = {caseInsensitive: true}
+      this.state = {
+        caseInsensitive: true,
+        searchResults: []
+      }
     }
 
     componentDidMount() {
@@ -62,6 +65,10 @@ exports.decorateTerm = (Term, { React }) => {
       window.rpc.removeListener('hyper-search:seach:prev', this.handleSearchPrev);
       window.rpc.removeListener('hyper-search:toggle:input', this.handleToggleInput);
       window.rpc.removeListener('hyper-search:toggle:case', this.handleToggleCaseInsensitive);
+    }
+
+    getConfig() {
+      return config.getConfig().hyperSearchUI || {};
     }
 
     //legacy code for version <= 1.4.8
@@ -166,6 +173,7 @@ exports.decorateTerm = (Term, { React }) => {
           }
           this.copySelectionToClipboard();
         } else if (event.key === ESCAPE) {
+          this.clearSearchResults()
           window.store.dispatch(toggleSearchInput(uid));
           if (this.props.term) getTerm(this.props).focus();
         }
@@ -174,7 +182,11 @@ exports.decorateTerm = (Term, { React }) => {
 
     handleSearch(direction) {
       const term = getTerm(this.props);
-      if (!term.selectionManager) {
+
+      if (true) {
+        this.clearSearchResults();
+        this.searchAll();
+      } else if (!term.selectionManager) {
         this.legacySearch(direction);
       } else {
         this.search(direction);
@@ -240,6 +252,76 @@ exports.decorateTerm = (Term, { React }) => {
         }
       }
       return line;
+    }
+
+    clearSearchResults() {
+      const term = getTerm(this.props);
+
+      for (let result of this.state.searchResults) {
+        this.highlightSearchResult(result)
+      }
+
+      term.renderer.refreshRows();
+      this.state.searchResults = [];
+    }
+
+    highlightSearchResult(result) {
+      const term = getTerm(this.props);
+      const row = term.buffer.lines.get(result.rowIndex)
+      const highlightColor = this.getConfig().highlightColor || 200200;
+
+      let prevColor = undefined;
+
+      for (let i = result.matchStartIndex; i < result.matchEndIndex; i++) {
+        let char = row.get(i);
+
+        if (!prevColor && i === result.matchStartIndex) {
+          prevColor = char[0];
+        }
+
+        if (result.prevColor) {
+          char[0] = result.prevColor;
+        } else {
+          char[0] = highlightColor;
+        }
+
+        row.set(i, char)
+      }
+
+      return prevColor;
+    }
+
+    searchAll() {
+      const term = getTerm(this.props);
+      const buffer = term.buffer;
+
+      const flags = this.isCaseInsensitive() ? 'gi' : 'g';
+      const inputText = this.getInputText();
+      const searchTerm = new RegExp(inputText, flags); // config flag toggle for regex
+
+      const startIndex = buffer.ydisp;
+      const endIndex = startIndex + (buffer._rows - 2); // fuck bffer rows is to the end of the terminal window not where the prompt is!!
+
+      if (!inputText.length) { return; }
+
+      for (const [i, line] of buffer.lines._array.slice(startIndex, endIndex).entries()) {
+        const l = line.translateToString();
+        let match = undefined;
+
+        while ((match = searchTerm.exec(l)) != null) {
+          const matchResult = match[0].trimEnd();
+          const result = {
+            matchStartIndex: match.index,
+            matchEndIndex: match.index + matchResult.length,
+            rowIndex: startIndex + i
+          }
+
+          result.prevColor = this.highlightSearchResult(result);
+          this.state.searchResults.push(result);
+        }
+      }
+
+      term.renderer.refreshRows();
     }
 
     // toodo: refactor this method and write some tests
